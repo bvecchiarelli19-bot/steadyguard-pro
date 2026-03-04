@@ -1,8 +1,9 @@
 """
-SteadyGuard Pro — Custom Portfolio Backtest
-============================================
-Uses the site's monthly returns/regime data (Jan 1998 - Jan 2026).
-28 years. Monthly rebalancing. Same formula as the public site.
+SteadyGuard Pro — Custom Portfolio Backtest (V3)
+=================================================
+Monthly model with LAGGED signals (signal from month M-1 applies to month M).
+This is methodologically correct: you act on last month's data.
+28 years: Jan 1998 – Jan 2026 | 337 months.
 """
 import numpy as np
 import json
@@ -11,7 +12,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 
-st.set_page_config(page_title="SteadyGuard Pro", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="SteadyGuard Pro", page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 # ── CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -59,17 +61,21 @@ st.markdown("""
     .rc-m { background: #713f12; color: #fcd34d; }
     .rc-h { background: #7c2d12; color: #fdba74; }
     .rc-c { background: #7f1d1d; color: #fca5a5; }
+    .ref-box { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
+    .ref-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
+        padding: 0.9rem 1.1rem; flex: 1; min-width: 180px; }
+    .ref-card-label { font-size: 0.68rem; color: #475569; text-transform: uppercase;
+        letter-spacing: 0.06em; margin-bottom: 0.3rem; }
+    .ref-card-value { font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; color: #94a3b8; }
     .ref-note { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px;
-        padding: 0.8rem 1rem; margin-top: 1rem; font-size: 0.8rem; color: #64748b; }
-    .ref-note strong { color: #94a3b8; }
+        padding: 0.8rem 1rem; margin-top: 0.8rem; font-size: 0.78rem; color: #475569; line-height: 1.5; }
+    .ref-note strong { color: #64748b; }
 </style>
 """, unsafe_allow_html=True)
 
-CL = {
-    "static": "#6366f1", "sg": "#10b981",
-    "sf": "rgba(99,102,241,0.15)", "sgf": "rgba(16,185,129,0.15)",
-    "grid": "#1e293b", "bg": "#0a0e17", "paper": "#0a0e17", "txt": "#94a3b8",
-}
+CL = {"static": "#6366f1", "sg": "#10b981",
+      "sf": "rgba(99,102,241,0.15)", "sgf": "rgba(16,185,129,0.15)",
+      "grid": "#1e293b", "bg": "#0a0e17", "paper": "#0a0e17", "txt": "#94a3b8"}
 
 
 @st.cache_data
@@ -84,24 +90,35 @@ def load_data():
 
 
 def run_bt(data, eq_pct):
+    """Monthly backtest with LAGGED signals. Signal from month M-1 applies to month M."""
     eq = eq_pct / 100.0
     vs = vg = 10000.0
-    prev = 1.0
+    prev_scalar = 1.0
     cs, cg, dates = [10000.0], [10000.0], []
-    scalars_used = []
+    regimes_used = []
 
-    for m in data:
-        s, b, sc = m['s'], m['b'], m['scalar']
+    for i, m in enumerate(data):
+        s, b = m['s'], m['b']
+        # LAGGED: use previous month's signal (realistic — you act on known data)
+        scalar = data[i - 1]['scalar'] if i > 0 else 1.0
+        regime = data[i - 1]['regime'] if i > 0 else 'LOW'
+
+        # Static: fixed allocation
         vs *= (1 + eq * s + (1 - eq) * b)
-        eq_adj = eq * sc
-        vg *= (1 + eq_adj * s + (1 - eq_adj) * b - 0.001 * abs(sc - prev))
-        prev = sc
+
+        # SteadyGuard: scalar adjusts equity portion
+        eq_adj = eq * scalar
+        ret_sg = eq_adj * s + (1 - eq_adj) * b
+        tx = 0.001 * abs(scalar - prev_scalar)
+        vg *= (1 + ret_sg - tx)
+        prev_scalar = scalar
+
         dates.append(m['d'])
         cs.append(vs)
         cg.append(vg)
-        scalars_used.append(sc)
+        regimes_used.append(regime)
 
-    return dates, cs, cg, scalars_used
+    return dates, cs, cg, regimes_used
 
 
 def metrics(curve, n_yr):
@@ -115,7 +132,8 @@ def metrics(curve, n_yr):
     mdd = dd.min()
     calmar = cagr / abs(mdd) if mdd != 0 else 0
     tot = a[-1] / a[0] - 1
-    return {"CAGR": cagr, "MaxDD": mdd, "Vol": vol, "Sharpe": sharpe, "Calmar": calmar, "Total": tot}
+    return {"CAGR": cagr, "MaxDD": mdd, "Vol": vol, "Sharpe": sharpe,
+            "Calmar": calmar, "Total": tot}
 
 
 # ── Load ───────────────────────────────────────────────────────────────
@@ -133,11 +151,29 @@ st.markdown("""
 <div class="hero-sub">Custom portfolio backtest — see how V3c protects your allocation over 28 years</div>
 """, unsafe_allow_html=True)
 
+# ── Reference metrics from the validated daily model ───────────────────
+st.markdown("""
+<div class="ref-box">
+    <div class="ref-card">
+        <div class="ref-card-label">100% Stocks (buy & hold)</div>
+        <div class="ref-card-value">9.16% CAGR · -55.19% MaxDD</div>
+    </div>
+    <div class="ref-card" style="border-color:#10b98140;">
+        <div class="ref-card-label">Stocks + SteadyGuard (validated daily model)</div>
+        <div class="ref-card-value" style="color:#10b981;">8.81% CAGR · -20.57% MaxDD</div>
+    </div>
+    <div class="ref-card">
+        <div class="ref-card-label">60/40 Portfolio</div>
+        <div class="ref-card-value">7.77% CAGR · -28.40% MaxDD</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 # ── Inputs ─────────────────────────────────────────────────────────────
 c1, _, c2 = st.columns([2, 0.3, 1.5])
 with c1:
     eq = st.slider("Equity Allocation %", 0, 100, 70, 5,
-                   help="% allocated to stocks (SPY). Rest goes to bonds (VUSTX/TLT).")
+                   help="% allocated to stocks (SPY). Remainder goes to bonds (VUSTX/TLT).")
     bd = 100 - eq
     st.markdown(f"""
     <div class="alloc-display">
@@ -164,33 +200,44 @@ with c2:
     </div>""", unsafe_allow_html=True)
 
 # ── Run ────────────────────────────────────────────────────────────────
-dates, cs, cg, scalars = run_bt(data, eq)
+dates, cs, cg, regimes = run_bt(data, eq)
 all_dates = [data[0]['d']] + dates
 sm = metrics(cs, n_years)
 gm = metrics(cg, n_years)
 
 # ── Metric Cards ───────────────────────────────────────────────────────
-st.markdown('<div class="section-hdr">SteadyGuard Results</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-hdr">Custom Backtest Results</div>', unsafe_allow_html=True)
 
-def dh(sv, gv, fmt="pct"):
+
+def dh(sv, gv, fmt="pct", invert=False):
+    """Delta HTML. invert=True means lower is better (drawdown, vol)."""
     d = gv - sv
-    cls = "up" if d > 0 else "dn"
+    if invert:
+        is_better = d > 0 if fmt == "pct" and "MaxDD" else d < 0
+        # For MaxDD (negative values), less negative = better = positive delta is better
+        is_better = d > 0
+    else:
+        is_better = d > 0
+    cls = "up" if is_better else "dn"
     if fmt == "num":
-        return f'<span class="metric-delta {cls}">{"+" if d>0 else ""}{d:.2f} vs static</span>'
-    return f'<span class="metric-delta {cls}">{"+" if d>0 else ""}{d:.2%} vs static</span>'
+        return f'<span class="metric-delta {cls}">{"+" if d > 0 else ""}{d:.2f} vs static</span>'
+    return f'<span class="metric-delta {cls}">{"+" if d > 0 else ""}{d:.2%} vs static</span>'
 
-dd_better = gm['MaxDD'] > sm['MaxDD']
+
+dd_better = gm['MaxDD'] > sm['MaxDD']  # less negative = better
+cagr_better = gm['CAGR'] > sm['CAGR']
+
 st.markdown(f"""
 <div class="metric-row">
-    <div class="metric-card hl">
+    <div class="metric-card {'hl' if cagr_better else ''}">
         <div class="metric-label">CAGR</div>
-        <div class="metric-value grn">{gm['CAGR']:.2%}</div>
+        <div class="metric-value {'grn' if cagr_better else ''}">{gm['CAGR']:.2%}</div>
         {dh(sm['CAGR'], gm['CAGR'])}
     </div>
-    <div class="metric-card hl">
+    <div class="metric-card {'hl' if dd_better else ''}">
         <div class="metric-label">Max Drawdown</div>
         <div class="metric-value {'grn' if dd_better else ''}">{gm['MaxDD']:.2%}</div>
-        {dh(sm['MaxDD'], gm['MaxDD'])}
+        {dh(sm['MaxDD'], gm['MaxDD'], invert=True)}
     </div>
     <div class="metric-card hl">
         <div class="metric-label">Sharpe Ratio</div>
@@ -210,39 +257,42 @@ st.markdown('<div class="section-hdr">Equity Curve</div>', unsafe_allow_html=Tru
 
 fig = make_subplots(rows=2, cols=1, row_heights=[0.72, 0.28], shared_xaxes=True, vertical_spacing=0.04)
 fig.add_trace(go.Scatter(x=all_dates, y=cs, name=f"Static {eq}/{bd}",
-    line=dict(color=CL["static"], width=1.8), opacity=0.8), row=1, col=1)
+                         line=dict(color=CL["static"], width=1.8), opacity=0.8), row=1, col=1)
 fig.add_trace(go.Scatter(x=all_dates, y=cg, name=f"SteadyGuard {eq}/{bd}",
-    line=dict(color=CL["sg"], width=2.2)), row=1, col=1)
+                         line=dict(color=CL["sg"], width=2.2)), row=1, col=1)
 
-# Drawdown panel
-for lbl, crv, clr, fl in [("_dd_s", cs, CL["static"], CL["sf"]), ("_dd_g", cg, CL["sg"], CL["sgf"])]:
+# Drawdown
+for lbl, crv, clr, fl in [("_s", cs, CL["static"], CL["sf"]), ("_g", cg, CL["sg"], CL["sgf"])]:
     a = np.array(crv)
     pk = np.maximum.accumulate(a)
     dd = (a - pk) / pk
     fig.add_trace(go.Scatter(x=all_dates, y=dd, name=lbl,
         line=dict(color=clr, width=0.8), fill="tozeroy", fillcolor=fl, showlegend=False), row=2, col=1)
 
-# Regime background bands
-regime_colors = {"LOW": "rgba(16,185,129,0.04)", "MID": "rgba(250,204,21,0.06)",
-                 "HIGH": "rgba(249,115,22,0.08)", "CRISIS": "rgba(239,68,68,0.1)"}
+# Regime shading on equity curve
+regime_colors = {"MID": "rgba(250,204,21,0.05)", "HIGH": "rgba(249,115,22,0.07)",
+                 "CRISIS": "rgba(239,68,68,0.09)"}
 i = 0
-while i < len(data):
-    r = data[i]['regime']
-    j = i
-    while j < len(data) and data[j]['regime'] == r:
-        j += 1
-    if r != "LOW":
-        fig.add_vrect(x0=data[i]['d'], x1=data[min(j, len(data)-1)]['d'],
-            fillcolor=regime_colors.get(r, "rgba(0,0,0,0)"), line_width=0, row=1, col=1)
-    i = j
+while i < len(regimes):
+    r = regimes[i]
+    if r in regime_colors:
+        j = i
+        while j < len(regimes) and regimes[j] == r:
+            j += 1
+        fig.add_vrect(x0=dates[i], x1=dates[min(j - 1, len(dates) - 1)],
+                      fillcolor=regime_colors[r], line_width=0, row=1, col=1)
+        i = j
+    else:
+        i += 1
 
 fig.update_layout(height=520, template="plotly_dark", paper_bgcolor=CL["paper"],
     plot_bgcolor=CL["bg"], font=dict(family="DM Sans", color=CL["txt"], size=12),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
     margin=dict(l=60, r=20, t=40, b=40), hovermode="x unified")
 fig.update_yaxes(type="log", title="Growth of $10,000", gridcolor=CL["grid"], gridwidth=0.5,
-    row=1, col=1, tickprefix="$", tickformat=",.0f")
-fig.update_yaxes(title="Drawdown", gridcolor=CL["grid"], gridwidth=0.5, tickformat=".0%", row=2, col=1)
+                 row=1, col=1, tickprefix="$", tickformat=",.0f")
+fig.update_yaxes(title="Drawdown", gridcolor=CL["grid"], gridwidth=0.5,
+                 tickformat=".0%", row=2, col=1)
 fig.update_xaxes(gridcolor=CL["grid"], gridwidth=0.5)
 
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -268,7 +318,7 @@ for label, key, fmt, lower_win in rows_data:
     else:
         ss, gs, ds = f"{sv:.2f}", f"{gv:.2f}", f"{'+'if d>0 else''}{d:.2f}"
     if lower_win:
-        sg_wins = gv < sv if key != "MaxDD" else gv > sv
+        sg_wins = gv > sv  # for MaxDD (negative), less negative = higher = better
     else:
         sg_wins = gv > sv
     sc = "win" if sg_wins else ""
@@ -282,15 +332,16 @@ st.markdown(f"""
 </table>
 """, unsafe_allow_html=True)
 
-# ── Reference Note ─────────────────────────────────────────────────────
-st.markdown(f"""
+# ── Methodology Note ───────────────────────────────────────────────────
+st.markdown("""
 <div class="ref-note">
-    <strong>Methodology note:</strong> This tool uses the same monthly returns and V3c regime signals
-    as the main SteadyGuard site. Results reflect monthly rebalancing with a 0.1% transaction cost
-    per regime change. The flagship site metrics (8.81% CAGR, -20.57% MaxDD at 100% equity) are
-    derived from a daily-frequency production model; this monthly approximation captures the same
-    regime shifts but may differ slightly in absolute levels due to intra-month price movements.
-    Relative comparisons between static and SteadyGuard allocations are accurate.
+    <strong>Methodology:</strong> Monthly rebalancing with lagged signals — each month's allocation
+    is based on the <em>previous</em> month's V3c risk assessment, reflecting real-world execution
+    (you act on known data). Transaction cost of 10bps per regime change. The reference metrics
+    above come from the validated daily production model, which additionally incorporates a
+    trend persistence filter; this monthly tool may show slightly different absolute levels but
+    captures the same regime dynamics. Relative comparisons between static and SteadyGuard
+    allocations are accurate.
 </div>
 """, unsafe_allow_html=True)
 
@@ -308,6 +359,8 @@ and Hurst trend persistence into four regimes:
 | **CRISIS** | 0.2× | **{int(eq*0.2)}%** SPY |
 
 Capital freed from equities moves to bonds (VUSTX/TLT), then returns when conditions improve.
+Signals are lagged by one month — the model assesses risk at month-end and adjusts the
+portfolio at the start of the following month.
 
 **Period:** Jan 1998 – Jan 2026 ({n_years:.0f} years) covering the dot-com crash, GFC,
 COVID crash, and 2022 bear market.
