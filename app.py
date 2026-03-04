@@ -233,14 +233,18 @@ COLORS = {
 @st.cache_data
 def load_data():
     """Load SPY/TLT returns and V3c signals from repo files."""
-    # Find files
+    # Find files — check multiple naming conventions
     search = [Path("."), Path("/mnt/user-data/uploads"), Path(__file__).parent]
+    ec_names = ["equity_curves (4).csv", "equity_curves__4_.csv", "equity_curves.csv"]
+    dr_names = ["drivers_timeseries (2).csv", "drivers_timeseries__2_.csv", "drivers_timeseries.csv"]
     ec_path = dr_path = None
     for d in search:
-        if (d / "equity_curves__4_.csv").exists():
-            ec_path = d / "equity_curves__4_.csv"
-        if (d / "drivers_timeseries__2_.csv").exists():
-            dr_path = d / "drivers_timeseries__2_.csv"
+        for name in ec_names:
+            if (d / name).exists() and ec_path is None:
+                ec_path = d / name
+        for name in dr_names:
+            if (d / name).exists() and dr_path is None:
+                dr_path = d / name
     if not ec_path or not dr_path:
         st.error("Data files not found. Place equity_curves and drivers_timeseries CSVs in the app directory.")
         st.stop()
