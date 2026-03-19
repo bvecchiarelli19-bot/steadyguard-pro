@@ -412,39 +412,51 @@ def fetch_prices(tickers_str, bond_ticker):
     if data.empty:
         return None, "No data returned. Check ticker symbols."
 
-    # Handle yfinance column formats (varies by version and ticker count)
+    # Debug: show what yfinance returned
+    col_info = f"Shape: {data.shape}, Columns type: {type(data.columns).__name__}"
     if isinstance(data.columns, pd.MultiIndex):
-        # Multi-ticker: columns are ('Close', 'AAPL'), ('Close', 'AMZN'), etc.
-        if 'Close' in data.columns.get_level_values(0):
-            closes = data['Close'].copy()
-        elif 'close' in [c.lower() for c in data.columns.get_level_values(0)]:
-            lvl0 = data.columns.get_level_values(0)
-            close_label = [c for c in lvl0 if c.lower() == 'close'][0]
-            closes = data[close_label].copy()
-        else:
-            # Try first level
-            closes = data.iloc[:, :len(all_tickers)].copy()
-            closes.columns = all_tickers
+        col_info += f", Levels: {data.columns.names}, L0 unique: {list(data.columns.get_level_values(0).unique())[:5]}"
     else:
-        # Single ticker
+        col_info += f", Cols: {list(data.columns)[:8]}"
+
+    # Handle yfinance column formats
+    closes = None
+    if isinstance(data.columns, pd.MultiIndex):
+        level_0 = list(data.columns.get_level_values(0).unique())
+        # Try 'Close' first, then 'Price' (newer yfinance), then 'close'
+        for candidate in ['Close', 'Price', 'close', 'price', 'Adj Close']:
+            if candidate in level_0:
+                closes = data[candidate].copy()
+                break
+        if closes is None:
+            # Fall back: just take the first level value
+            closes = data[level_0[0]].copy()
+    else:
         if 'Close' in data.columns:
             closes = data[['Close']].copy()
             closes.columns = [all_tickers[0]]
-        else:
+        elif len(all_tickers) == 1:
             closes = data.iloc[:, [0]].copy()
             closes.columns = [all_tickers[0]]
+        else:
+            closes = data.copy()
+
+    if closes is None:
+        return None, f"Could not parse price data. Debug: {col_info}"
+
+    # Ensure columns are uppercase ticker names
+    closes.columns = [str(c).upper() for c in closes.columns]
 
     # Ensure all requested tickers are present
     missing = [t for t in all_tickers if t not in closes.columns]
     if missing:
-        return None, f"Could not find data for: {', '.join(missing)}"
+        return None, f"Could not find data for: {', '.join(missing)}. Available: {list(closes.columns)[:8]}. Debug: {col_info}"
 
-    # Drop rows where ALL equity tickers are NaN (keep partial data)
-    # Only require that all tickers have data (dropna on the full set)
+    # Drop rows where any ticker has NaN (need all tickers to have data)
     closes = closes.dropna()
 
     if len(closes) < 20:
-        return None, f"Insufficient overlapping data ({len(closes)} days). Some tickers may have limited history."
+        return None, f"Insufficient overlapping data ({len(closes)} days). Some tickers may have limited history. Debug: {col_info}"
     return closes, None
 
 
