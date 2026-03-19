@@ -403,20 +403,48 @@ def load_signals():
 @st.cache_data(ttl=3600)
 def fetch_prices(tickers_str, bond_ticker):
     import yfinance as yf
+    import pandas as pd
     tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
     all_tickers = list(set(tickers + [bond_ticker]))
+
     data = yf.download(all_tickers, start="1998-01-01", auto_adjust=True,
                        progress=False, threads=True)
     if data.empty:
         return None, "No data returned. Check ticker symbols."
-    if len(all_tickers) == 1:
-        closes = data[['Close']].copy()
-        closes.columns = [all_tickers[0]]
+
+    # Handle yfinance column formats (varies by version and ticker count)
+    if isinstance(data.columns, pd.MultiIndex):
+        # Multi-ticker: columns are ('Close', 'AAPL'), ('Close', 'AMZN'), etc.
+        if 'Close' in data.columns.get_level_values(0):
+            closes = data['Close'].copy()
+        elif 'close' in [c.lower() for c in data.columns.get_level_values(0)]:
+            lvl0 = data.columns.get_level_values(0)
+            close_label = [c for c in lvl0 if c.lower() == 'close'][0]
+            closes = data[close_label].copy()
+        else:
+            # Try first level
+            closes = data.iloc[:, :len(all_tickers)].copy()
+            closes.columns = all_tickers
     else:
-        closes = data['Close'].copy()
+        # Single ticker
+        if 'Close' in data.columns:
+            closes = data[['Close']].copy()
+            closes.columns = [all_tickers[0]]
+        else:
+            closes = data.iloc[:, [0]].copy()
+            closes.columns = [all_tickers[0]]
+
+    # Ensure all requested tickers are present
+    missing = [t for t in all_tickers if t not in closes.columns]
+    if missing:
+        return None, f"Could not find data for: {', '.join(missing)}"
+
+    # Drop rows where ALL equity tickers are NaN (keep partial data)
+    # Only require that all tickers have data (dropna on the full set)
     closes = closes.dropna()
-    if len(closes) < 60:
-        return None, f"Insufficient overlapping data ({len(closes)} days)."
+
+    if len(closes) < 20:
+        return None, f"Insufficient overlapping data ({len(closes)} days). Some tickers may have limited history."
     return closes, None
 
 
