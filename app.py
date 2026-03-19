@@ -548,6 +548,13 @@ with c_sl:
     </div>
     """, unsafe_allow_html=True)
 
+    from datetime import date as _date
+    start_date_input = st.date_input("Backtest Start Date (optional)",
+                               value=None,
+                               min_value=_date(1998, 1, 1),
+                               max_value=_date(2026, 1, 31),
+                               help="Leave blank to use all available data, or set a date to simulate when you built your portfolio.")
+
 with c_nfo:
     st.markdown(f"""
     <div class="sg-info-card">
@@ -593,8 +600,13 @@ if run_clicked or st.session_state.get("has_run", False):
     combined = build_portfolio_returns(closes, tickers_input, weight_list, bond_ticker.strip().upper())
     combined_f = combined[combined["ym"].isin(signals_dict.keys())]
 
-    if len(combined_f) < 60:
-        st.error(f"Only {len(combined_f)} trading days overlap with signal period. Need 60+.")
+    # Apply user's start date if provided
+    if start_date_input is not None:
+        import pandas as pd
+        combined_f = combined_f[combined_f.index >= pd.Timestamp(start_date_input)]
+
+    if len(combined_f) < 20:
+        st.error(f"Only {len(combined_f)} trading days in the selected period. Need at least 20.")
         st.stop()
 
     start_d = combined_f.index.min()
